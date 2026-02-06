@@ -8,6 +8,32 @@ const Party = require('../models/Party');
 const DeliveryChallan = require('../models/DeliveryChallan');
 const CreditNote = require('../models/CreditNote');
 
+const calculateInvoiceStatus = (sale) => {
+    // 1. Paid Check
+    // Strictly rely on balanceDue. isPaid should be a result, not a cause.
+    if (sale.balanceDue !== undefined && sale.balanceDue <= 1) {
+        return 'Paid';
+    }
+
+    // 2. Overdue Check
+    const now = new Date();
+    if (sale.dueDate && new Date(sale.dueDate) < now && sale.balanceDue > 1) {
+        return 'Overdue';
+    }
+
+    // 3. Partial vs Unpaid
+    const total = sale.grandTotal || 0;
+    const balance = sale.balanceDue || 0;
+
+    // If some amount is paid but not fully (balance < total)
+    if (balance < total) {
+        return 'Partial';
+    }
+
+    // 4. Default to Unpaid
+    return 'Unpaid';
+};
+
 const createSale = async (req, res) => {
     const session = await SaleInvoice.startSession(); // Use any model for session
     session.startTransaction();
@@ -186,7 +212,15 @@ const createSale = async (req, res) => {
                 saleData.invoiceNumber = `INV-${nextNum}`;
             }
 
-            const saleInvoice = new SaleInvoice(saleData);
+            const saleInvoice = new SaleInvoice({
+                ...saleData,
+                createdBy: req.user ? req.user.id : undefined
+            });
+
+            // Calculate Status & Sync isPaid
+            saleInvoice.status = calculateInvoiceStatus(saleInvoice);
+            saleInvoice.isPaid = saleInvoice.status === 'Paid';
+
             await saleInvoice.save({ session });
 
             // If created from Order, update Order Status
@@ -219,17 +253,26 @@ const createSale = async (req, res) => {
 
             // --- EFFECT LOGIC (Stock & Party) ---
             // 1. Update Stock
+            // 1. Update Stock (Aggregated to prevent WriteConflict)
+            const productUpdates = {}; // { productId: quantityChange }
+
             if (saleInvoice.items && saleInvoice.items.length > 0) {
+                // First pass: Calculate total changes per product
                 for (const lineItem of saleInvoice.items) {
                     if (lineItem.itemId) {
                         const itemDoc = await Item.findById(lineItem.itemId).session(session);
                         if (itemDoc && itemDoc.type === 'product' && itemDoc.product) {
                             const qty = Number(lineItem.quantity);
+                            const productId = itemDoc.product.toString();
                             // Sale: Decrease Stock
-                            const change = -qty;
-                            await Product.findByIdAndUpdate(itemDoc.product, { $inc: { 'currentQuantity': change } }, { session });
+                            productUpdates[productId] = (productUpdates[productId] || 0) - qty;
                         }
                     }
+                }
+
+                // Second pass: Perform updates (one per product)
+                for (const [productId, change] of Object.entries(productUpdates)) {
+                    await Product.findByIdAndUpdate(productId, { $inc: { 'currentQuantity': change } }, { session });
                 }
             }
 
@@ -275,56 +318,57 @@ const getSales = async (req, res) => {
         const filter = {};
         if (companyId) filter.companyId = companyId;
         if (partyId) filter.partyId = partyId;
+        // Godown filter for default
+        if (req.query.godown) filter.godown = req.query.godown;
+
+        // Helper to add date filter if exists
+        const addDateFilter = (field) => {
+            if (startDate && endDate) {
+                filter[field] = { $gte: new Date(startDate), $lte: new Date(endDate) };
+            }
+        };
 
         if (type === 'SO') {
-            // Query SaleOrder Collection
-            // Date Filter on orderDate
-            if (startDate && endDate) {
-                filter.orderDate = { $gte: new Date(startDate), $lte: new Date(endDate) };
-            }
+            addDateFilter('orderDate');
             const orders = await SaleOrder.find(filter).populate('partyId', 'name phone').sort({ createdAt: -1 });
             res.json(orders);
 
         } else if (type === 'PROFORMA') {
-            // Query ProformaInvoice Collection
-            if (startDate && endDate) {
-                filter.invoiceDate = { $gte: new Date(startDate), $lte: new Date(endDate) };
-            }
+            addDateFilter('invoiceDate');
             const proformas = await ProformaInvoice.find(filter).populate('partyId', 'name phone').sort({ createdAt: -1 });
             res.json(proformas);
 
         } else if (type === 'ESTIMATE') {
-            // Query Estimate Collection
-            if (startDate && endDate) {
-                filter.invoiceDate = { $gte: new Date(startDate), $lte: new Date(endDate) };
-            }
+            addDateFilter('invoiceDate');
             const estimates = await Estimate.find(filter).populate('partyId', 'name phone').sort({ createdAt: -1 });
             res.json(estimates);
 
         } else if (type === 'DELIVERY_CHALLAN') {
-            // Query DeliveryChallan
-            if (startDate && endDate) {
-                filter.challanDate = { $gte: new Date(startDate), $lte: new Date(endDate) };
-            }
+            addDateFilter('challanDate');
             const challans = await DeliveryChallan.find(filter).populate('partyId', 'name phone').sort({ createdAt: -1 });
             res.json(challans);
 
         } else if (type === 'CREDIT_NOTE') {
-            // Query CreditNote
-            if (startDate && endDate) {
-                filter.creditNoteDate = { $gte: new Date(startDate), $lte: new Date(endDate) };
-            }
+            addDateFilter('creditNoteDate');
             const creditNotes = await CreditNote.find(filter).populate('partyId', 'name phone').sort({ createdAt: -1 });
             res.json(creditNotes);
 
         } else {
-            // Query SaleInvoice Collection (Default)
-            if (startDate && endDate) {
-                filter.invoiceDate = { $gte: new Date(startDate), $lte: new Date(endDate) };
-            }
+            // --- SALE INVOICE (Default) ---
+            addDateFilter('invoiceDate');
             if (isReturn !== undefined) filter.isReturn = isReturn === 'true';
 
-            const invoices = await SaleInvoice.find(filter).populate('partyId', 'name phone').sort({ createdAt: -1 });
+            if (req.query.userId) {
+                filter.createdBy = req.query.userId;
+            }
+            if (req.query.status && req.query.status !== 'All Status') {
+                filter.status = req.query.status;
+            }
+
+            const invoices = await SaleInvoice.find(filter)
+                .populate('partyId', 'name phone')
+                .populate('createdBy', 'name') // Populate creator
+                .sort({ createdAt: -1 });
             res.json(invoices);
         }
 
@@ -412,6 +456,10 @@ const convertToInvoice = async (req, res) => {
         invoiceData.invoiceDate = new Date();
 
         const newInvoice = new SaleInvoice(invoiceData);
+        // Calculate status on conversion too
+        newInvoice.status = calculateInvoiceStatus(newInvoice);
+        newInvoice.isPaid = newInvoice.status === 'Paid';
+
         await newInvoice.save({ session });
 
         // Update Status
@@ -452,12 +500,20 @@ const convertToInvoice = async (req, res) => {
 
 const updateSale = async (req, res) => {
     try {
-        // Check type from body or just try update
+        const updateData = req.body;
+
         // Simplify: try update Invoice, if null try Order
-        let updated = await SaleInvoice.findByIdAndUpdate(req.params.id, req.body, { new: true });
-        if (!updated) {
-            updated = await SaleOrder.findByIdAndUpdate(req.params.id, req.body, { new: true });
+        // Try SaleInvoice first as it's the priority for status updates
+        let doc = await SaleInvoice.findById(req.params.id);
+        if (doc) {
+            Object.assign(doc, updateData);
+            doc.status = calculateInvoiceStatus(doc);
+            doc.isPaid = doc.status === 'Paid';
+            await doc.save();
+            return res.json(doc);
         }
+
+        let updated = await SaleOrder.findByIdAndUpdate(req.params.id, req.body, { new: true });
         if (!updated) {
             updated = await ProformaInvoice.findByIdAndUpdate(req.params.id, req.body, { new: true });
         }
@@ -523,4 +579,4 @@ module.exports = {
     deleteSale,
     convertToInvoice,
     processReturn
-}
+};

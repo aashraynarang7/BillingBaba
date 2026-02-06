@@ -18,6 +18,7 @@ const saleOrderSchema = new mongoose.Schema({
     orderDate: { type: Date, default: Date.now },
     dueDate: { type: Date },
     stateOfSupply: { type: String },
+    godown: { type: String }, // Warehouse/Godown
 
     items: [{
         itemId: { type: mongoose.Schema.Types.ObjectId, ref: 'Item' },

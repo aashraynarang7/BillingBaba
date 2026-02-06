@@ -9,7 +9,7 @@ exports.createPaymentIn = async (req, res) => {
     const session = await mongoose.startSession();
     session.startTransaction();
     try {
-        const { companyId, partyId, receiptNo, date, amount, paymentMode, description, images, linkedInvoices } = req.body;
+        const { companyId, partyId, receiptNo, date, amount, paymentMode, description, images, linkedInvoices, godown } = req.body;
 
         // 1. Create Payment Record
         const payment = new PaymentIn({
@@ -21,11 +21,12 @@ exports.createPaymentIn = async (req, res) => {
             paymentMode,
             description,
             images,
-            linkedInvoices: linkedInvoices || []
+            linkedInvoices: linkedInvoices || [],
+            godown,
+            createdBy: req.user ? req.user.id : undefined
         });
 
         await payment.save({ session });
-
 
         // 2. Update Party Balance (Decrease balance for Payment In)
         const party = await Party.findById(partyId).session(session);
@@ -45,8 +46,17 @@ exports.createPaymentIn = async (req, res) => {
                     if (sale.balanceDue <= 0.01) { // Floating point tolerance
                         sale.balanceDue = 0;
                         sale.isPaid = true;
+                        sale.status = 'Paid';
                     } else {
                         sale.isPaid = false;
+                        const now = new Date();
+                        if (sale.dueDate && new Date(sale.dueDate) < now) {
+                            sale.status = 'Overdue';
+                        } else if (sale.balanceDue < sale.grandTotal) {
+                            sale.status = 'Partial';
+                        } else {
+                            sale.status = 'Unpaid';
+                        }
                     }
 
                     // Optional: Ensure balance doesn't go below zero if logic allows
@@ -72,14 +82,30 @@ exports.createPaymentIn = async (req, res) => {
 // Get All Payment In Records
 exports.getPaymentIn = async (req, res) => {
     try {
-        const { companyId } = req.query;
+        const { companyId, startDate, endDate, userId } = req.query;
         let query = {};
         if (companyId) {
             query.companyId = companyId;
         }
 
+        // Date Filter
+        if (startDate && endDate) {
+            query.date = { $gte: new Date(startDate), $lte: new Date(endDate) };
+        }
+
+        // User Filter
+        if (userId) {
+            query.createdBy = userId;
+        }
+
+        // Godown Filter
+        if (req.query.godown) {
+            query.godown = req.query.godown;
+        }
+
         const payments = await PaymentIn.find(query)
             .populate('partyId', 'name phone')
+            .populate('createdBy', 'name')
             .sort({ date: -1 });
 
         res.status(200).json(payments);

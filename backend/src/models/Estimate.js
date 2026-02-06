@@ -19,6 +19,7 @@ const estimateSchema = new mongoose.Schema({
     dueDate: { type: Date },
     invoiceTime: { type: String },
     stateOfSupply: { type: String },
+    godown: { type: String }, // Warehouse/Godown
 
     items: [{
         itemId: { type: mongoose.Schema.Types.ObjectId, ref: 'Item' },

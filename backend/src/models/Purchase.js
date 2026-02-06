@@ -79,6 +79,7 @@ const purchaseSchema = new mongoose.Schema({
     dueDate: { type: Date }, // PO/Bill Due Date
 
     stateOfSupply: { type: String },
+    godown: { type: String }, //Warehouse
 
     items: [purchaseItemSchema],
 

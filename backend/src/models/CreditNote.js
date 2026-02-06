@@ -21,6 +21,7 @@ const creditNoteSchema = new mongoose.Schema({
 
     // Address Details
     stateOfSupply: { type: String },
+    godown: { type: String }, // Warehouse/Godown
 
     items: [{
         itemId: { type: mongoose.Schema.Types.ObjectId, ref: 'Item' },

@@ -6,6 +6,10 @@ const saleInvoiceSchema = new mongoose.Schema({
         ref: 'Company',
         required: true
     },
+    createdBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    },
     partyId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Party',
@@ -67,6 +71,7 @@ const saleInvoiceSchema = new mongoose.Schema({
 
     isOrder: { type: Boolean, default: false }, // Should be false
     isPaid: { type: Boolean, default: true }, // Usually invoices are treated as finalized sales
+    status: { type: String, default: 'Unpaid' }, // Paid, Unpaid, Overdue
 
     // Linkage
     orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'SaleOrder' }, // If converted from order

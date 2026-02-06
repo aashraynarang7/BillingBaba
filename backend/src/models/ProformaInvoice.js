@@ -19,6 +19,7 @@ const proformaInvoiceSchema = new mongoose.Schema({
     dueDate: { type: Date }, // Optional validity
     invoiceTime: { type: String },
     stateOfSupply: { type: String },
+    godown: { type: String }, // Warehouse/Godown
 
     // Address Details (From Invoice Screenshot)
     billingAddress: { type: String },

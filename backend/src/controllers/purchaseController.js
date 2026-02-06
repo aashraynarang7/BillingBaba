@@ -130,6 +130,7 @@ exports.getPurchases = async (req, res) => {
 
         if (companyId) filter.companyId = companyId;
         if (partyId) filter.partyId = partyId;
+        if (req.query.godown) filter.godown = req.query.godown;
 
         if (type === 'DEBIT_NOTE') {
             // Query DebitNote

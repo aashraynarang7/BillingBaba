@@ -11,10 +11,15 @@ const paymentInSchema = new mongoose.Schema({
         ref: 'Party',
         required: true
     },
+    createdBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    },
     receiptNo: {
         type: String,
         required: true
     },
+    godown: { type: String }, //Warehouse
     date: {
         type: Date,
         default: Date.now
